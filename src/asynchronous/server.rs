@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use crate::asynchronous::stream::{receive, respond, respond_with_status};
 use crate::asynchronous::unix_incoming::UnixIncoming;
+use crate::asynchronous::tcp_incoming::TcpIncoming;
 use crate::common::{self, Domain, MESSAGE_TYPE_REQUEST};
 use crate::context;
 use crate::error::{get_status, Error, Result};
@@ -24,10 +25,11 @@ use futures::StreamExt as _;
 use std::marker::Unpin;
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::os::unix::net::UnixListener as SysUnixListener;
+use std::net::TcpListener as SysTcpListener;
 use tokio::{
     self,
     io::{split, AsyncRead, AsyncWrite, AsyncWriteExt},
-    net::UnixListener,
+    net::{UnixListener, TcpListener},
     select, spawn,
     sync::mpsc::{channel, Receiver, Sender},
     sync::watch,
@@ -131,6 +133,21 @@ impl Server {
                     .map_err(err_to_others_err!(e, "from_std error "))?;
 
                 let incoming = UnixIncoming::new(unix_listener);
+
+                self.do_start(incoming).await
+            }
+            Some(Domain::Tcp) => {
+                let sys_tcp_listener;
+                unsafe {
+                    sys_tcp_listener = SysTcpListener::from_raw_fd(listenfd);
+                }
+                sys_tcp_listener
+                    .set_nonblocking(true)
+                    .map_err(err_to_others_err!(e, "set_nonblocking error "))?;
+                let tcp_listener = TcpListener::from_std(sys_tcp_listener)
+                    .map_err(err_to_others_err!(e, "from_std error "))?;
+
+                let incoming = TcpIncoming::new(tcp_listener);
 
                 self.do_start(incoming).await
             }

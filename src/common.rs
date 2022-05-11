@@ -16,6 +16,7 @@ use std::os::unix::io::RawFd;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum Domain {
     Unix,
+    Tcp,
     #[cfg(target_os = "linux")]
     Vsock,
 }
@@ -88,6 +89,10 @@ fn parse_sockaddr(addr: &str) -> Result<(Domain, &str)> {
         return Ok((Domain::Vsock, addr));
     }
 
+    if let Some(addr) = addr.strip_prefix("tcp://") {
+        return Ok((Domain::Tcp, addr));
+    }
+
     Err(Error::Others(format!("Scheme {:?} is not supported", addr)))
 }
 
@@ -132,6 +137,9 @@ fn make_addr(domain: Domain, sockaddr: &str) -> Result<UnixAddr> {
                 UnixAddr::new(sockaddr).map_err(err_to_others_err!(e, ""))
             }
         }
+        Domain::Tcp => Err(Error::Others(
+            "function make_addr does not support create tcp socket".to_string(),
+        )),
         Domain::Vsock => Err(Error::Others(
             "function make_addr does not support create vsock socket".to_string(),
         )),
@@ -160,8 +168,25 @@ fn make_socket(addr: (&str, u32)) -> Result<(RawFd, Domain, SockAddr)> {
         Ok((fd, sockaddr))
     };
 
+    let get_tcp_sock_addr = |_domain, sockaddr| -> Result<(RawFd, SockAddr)> {
+        let fd = socket(AddressFamily::Inet, SockType::Stream, SOCK_CLOEXEC, None)
+            .map_err(|e| Error::Socket(e.to_string()))?;
+
+        // MacOS doesn't support atomic creation of a socket descriptor with SOCK_CLOEXEC flag,
+        // so there is a chance of leak if fork + exec happens in between of these calls.
+        #[cfg(target_os = "macos")]
+        set_fd_close_exec(fd)?;
+
+        let actual: std::net::SocketAddr = std::str::FromStr::from_str(sockaddr).unwrap();
+        let addr = InetAddr::from_std(&actual);
+        let sockaddr = SockAddr::new_inet(addr);
+
+        Ok((fd, sockaddr))
+    };
+
     let (fd, sockaddr) = match domain {
         Domain::Unix => get_sock_addr(domain, sockaddrv)?,
+        Domain::Tcp => get_tcp_sock_addr(domain, sockaddrv)?,
         #[cfg(target_os = "linux")]
         Domain::Vsock => {
             let sockaddr_port_v: Vec<&str> = sockaddrv.split(':').collect();

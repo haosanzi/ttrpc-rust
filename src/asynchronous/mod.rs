@@ -12,6 +12,7 @@ mod stream;
 #[doc(hidden)]
 mod utils;
 mod unix_incoming;
+mod tcp_incoming;
 
 #[doc(inline)]
 pub use crate::r#async::client::Client;
